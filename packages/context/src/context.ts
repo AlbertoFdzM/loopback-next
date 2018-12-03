@@ -14,6 +14,8 @@ import * as debugModule from 'debug';
 import {ValueOrPromise} from '.';
 const debug = debugModule('loopback:context');
 
+export type BindingFilter = (binding: Readonly<Binding<unknown>>) => boolean;
+
 /**
  * Context provides an implementation of Inversion of Control (IoC) container
  */
@@ -129,23 +131,6 @@ export class Context {
   }
 
   /**
-   * Convert a wildcard pattern to RegExp
-   * @param pattern A wildcard string with `*` and `?` as special characters.
-   * - `*` matches zero or more characters except `.` and `:`
-   * - `?` matches exactly one character except `.` and `:`
-   */
-  private wildcardToRegExp(pattern: string): RegExp {
-    // Escape reserved chars for RegExp:
-    // `- \ ^ $ + . ( ) | { } [ ] :`
-    let regexp = pattern.replace(/[\-\[\]\/\{\}\(\)\+\.\\\^\$\|\:]/g, '\\$&');
-    // Replace wildcard chars `*` and `?`
-    // `*` matches zero or more characters except `.` and `:`
-    // `?` matches one character except `.` and `:`
-    regexp = regexp.replace(/\*/g, '[^.:]*').replace(/\?/g, '[^.:]');
-    return new RegExp(`^${regexp}$`);
-  }
-
-  /**
    * Find bindings using the key pattern
    * @param pattern A regexp or wildcard pattern with optional `*` and `?`. If
    * it matches the binding key, the binding is included. For a wildcard:
@@ -162,27 +147,19 @@ export class Context {
    * include the binding or `false` to exclude the binding.
    */
   find<ValueType = BoundValue>(
-    filter: (binding: Readonly<Binding<ValueType>>) => boolean,
+    filter: BindingFilter,
   ): Readonly<Binding<ValueType>>[];
 
   find<ValueType = BoundValue>(
-    pattern?:
-      | string
-      | RegExp
-      | ((binding: Readonly<Binding<ValueType>>) => boolean),
+    pattern?: string | RegExp | BindingFilter,
   ): Readonly<Binding<ValueType>>[] {
-    let bindings: Readonly<Binding>[] = [];
-    let filter: (binding: Readonly<Binding>) => boolean;
-    if (!pattern) {
-      filter = binding => true;
-    } else if (typeof pattern === 'string') {
-      const regex = this.wildcardToRegExp(pattern);
-      filter = binding => regex.test(binding.key);
-    } else if (pattern instanceof RegExp) {
-      filter = binding => pattern.test(binding.key);
-    } else {
-      filter = pattern;
-    }
+    const bindings: Readonly<Binding>[] = [];
+    const filter: BindingFilter =
+      pattern == null ||
+      typeof pattern === 'string' ||
+      pattern instanceof RegExp
+        ? Context.bindingKeyFilter(pattern)
+        : pattern;
 
     for (const b of this.registry.values()) {
       if (filter(b)) bindings.push(b);
@@ -190,6 +167,21 @@ export class Context {
 
     const parentBindings = this._parent && this._parent.find(filter);
     return this._mergeWithParent(bindings, parentBindings);
+  }
+
+  /**
+   * Create a binding filter from key pattern
+   * @param keyPattern Binding key, wildcard, or regexp
+   */
+  static bindingKeyFilter(keyPattern?: string | RegExp) {
+    let filter: BindingFilter = binding => true;
+    if (typeof keyPattern === 'string') {
+      const regex = wildcardToRegExp(keyPattern);
+      filter = binding => regex.test(binding.key);
+    } else if (keyPattern instanceof RegExp) {
+      filter = binding => keyPattern.test(binding.key);
+    }
+    return filter;
   }
 
   /**
@@ -209,22 +201,32 @@ export class Context {
   findByTag<ValueType = BoundValue>(
     tagFilter: string | RegExp | TagMap,
   ): Readonly<Binding<ValueType>>[] {
-    if (typeof tagFilter === 'string' || tagFilter instanceof RegExp) {
-      const regexp =
-        typeof tagFilter === 'string'
-          ? this.wildcardToRegExp(tagFilter)
-          : tagFilter;
-      return this.find(b => Array.from(b.tagNames).some(t => regexp!.test(t)));
-    }
+    return this.find(Context.bindingTagFilter(tagFilter));
+  }
 
-    return this.find(b => {
-      for (const t in tagFilter) {
-        // One tag name/value does not match
-        if (b.tagMap[t] !== tagFilter[t]) return false;
-      }
-      // All tag name/value pairs match
-      return true;
-    });
+  /**
+   * Create a binding filter for the tag pattern
+   * @param tagPattern
+   */
+  static bindingTagFilter(tagPattern: string | RegExp | TagMap) {
+    let bindingFilter: BindingFilter;
+    if (typeof tagPattern === 'string' || tagPattern instanceof RegExp) {
+      const regexp =
+        typeof tagPattern === 'string'
+          ? wildcardToRegExp(tagPattern)
+          : tagPattern;
+      bindingFilter = b => Array.from(b.tagNames).some(t => regexp!.test(t));
+    } else {
+      bindingFilter = b => {
+        for (const t in tagPattern) {
+          // One tag name/value does not match
+          if (b.tagMap[t] !== tagPattern[t]) return false;
+        }
+        // All tag name/value pairs match
+        return true;
+      };
+    }
+    return bindingFilter;
   }
 
   protected _mergeWithParent<ValueType>(
@@ -493,4 +495,21 @@ export class Context {
     }
     return json;
   }
+}
+
+/**
+ * Convert a wildcard pattern to RegExp
+ * @param pattern A wildcard string with `*` and `?` as special characters.
+ * - `*` matches zero or more characters except `.` and `:`
+ * - `?` matches exactly one character except `.` and `:`
+ */
+function wildcardToRegExp(pattern: string): RegExp {
+  // Escape reserved chars for RegExp:
+  // `- \ ^ $ + . ( ) | { } [ ] :`
+  let regexp = pattern.replace(/[\-\[\]\/\{\}\(\)\+\.\\\^\$\|\:]/g, '\\$&');
+  // Replace wildcard chars `*` and `?`
+  // `*` matches zero or more characters except `.` and `:`
+  // `?` matches one character except `.` and `:`
+  regexp = regexp.replace(/\*/g, '[^.:]*').replace(/\?/g, '[^.:]');
+  return new RegExp(`^${regexp}$`);
 }
