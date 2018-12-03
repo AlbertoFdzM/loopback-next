@@ -44,8 +44,53 @@ describe('BindingTracker', () => {
       .to('XYZ')
       .tag('foo');
     expect(bindingTracker.bindings).to.containEql(xyzBinding);
+    // `abc` does not have the matching tag
     expect(bindingTracker.bindings).to.not.containEql(abcBinding);
     expect(await bindingTracker.values()).to.eql(['BAR', 'XYZ', 'FOO']);
+  });
+
+  it('reloads bindings if context bindings are added', async () => {
+    bindingTracker.watch();
+    const abcBinding = ctx
+      .bind('abc')
+      .to('ABC')
+      .tag('abc');
+    const xyzBinding = ctx
+      .bind('xyz')
+      .to('XYZ')
+      .tag('foo');
+    expect(bindingTracker.bindings).to.containEql(xyzBinding);
+    // `abc` does not have the matching tag
+    expect(bindingTracker.bindings).to.not.containEql(abcBinding);
+    expect(await bindingTracker.values()).to.eql(['BAR', 'XYZ', 'FOO']);
+  });
+
+  it('reloads bindings if context bindings are removed', async () => {
+    bindingTracker.watch();
+    ctx.unbind('bar');
+    expect(await bindingTracker.values()).to.eql(['FOO']);
+  });
+
+  it('reloads bindings if context bindings are rebound', async () => {
+    bindingTracker.watch();
+    ctx.bind('bar').to('BAR'); // No more tagged with `foo`
+    expect(await bindingTracker.values()).to.eql(['FOO']);
+  });
+
+  it('reloads bindings if parent context bindings are added', async () => {
+    bindingTracker.watch();
+    const xyzBinding = ctx
+      .parent!.bind('xyz')
+      .to('XYZ')
+      .tag('foo');
+    expect(bindingTracker.bindings).to.containEql(xyzBinding);
+    expect(await bindingTracker.values()).to.eql(['BAR', 'FOO', 'XYZ']);
+  });
+
+  it('reloads bindings if parent context bindings are removed', async () => {
+    bindingTracker.watch();
+    ctx.parent!.unbind('foo');
+    expect(await bindingTracker.values()).to.eql(['BAR']);
   });
 
   function givenBindingTracker() {
@@ -59,14 +104,16 @@ describe('@inject.filter', async () => {
   let ctx: Context;
   beforeEach(() => (ctx = givenContext()));
 
-  class MyController {
-    @inject.filter(Context.bindingTagFilter('foo'))
+  class MyControllerWithGetter {
+    @inject.filter(Context.bindingTagFilter('foo'), {watch: true})
     getter: Getter<string[]>;
   }
 
   class MyControllerWithValues {
-    @inject.filter(Context.bindingTagFilter('foo'))
-    values: string[];
+    constructor(
+      @inject.filter(Context.bindingTagFilter('foo'))
+      public values: string[],
+    ) {}
   }
 
   class MyControllerWithTracker {
@@ -75,10 +122,18 @@ describe('@inject.filter', async () => {
   }
 
   it('injects as getter', async () => {
-    ctx.bind('my-controller').toClass(MyController);
-    const inst = await ctx.get<MyController>('my-controller');
-    expect(inst.getter).to.be.a.Function();
-    expect(await inst.getter()).to.eql(['BAR', 'FOO']);
+    ctx.bind('my-controller').toClass(MyControllerWithGetter);
+    const inst = await ctx.get<MyControllerWithGetter>('my-controller');
+    const getter = inst.getter;
+    expect(getter).to.be.a.Function();
+    expect(await getter()).to.eql(['BAR', 'FOO']);
+    // Add a new binding that matches the filter
+    ctx
+      .bind('xyz')
+      .to('XYZ')
+      .tag('foo');
+    // The getter picks up the new binding
+    expect(await getter()).to.eql(['BAR', 'XYZ', 'FOO']);
   });
 
   it('injects as values', async () => {
@@ -92,6 +147,13 @@ describe('@inject.filter', async () => {
     const inst = await ctx.get<MyControllerWithTracker>('my-controller');
     expect(inst.tracker).to.be.instanceOf(BindingTracker);
     expect(await inst.tracker.values()).to.eql(['BAR', 'FOO']);
+    // Add a new binding that matches the filter
+    ctx
+      .bind('xyz')
+      .to('XYZ')
+      .tag('foo');
+    // The tracker picks up the new binding
+    expect(await inst.tracker.values()).to.eql(['BAR', 'XYZ', 'FOO']);
   });
 });
 

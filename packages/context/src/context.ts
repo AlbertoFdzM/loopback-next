@@ -12,6 +12,7 @@ import {v1 as uuidv1} from 'uuid';
 
 import * as debugModule from 'debug';
 import {ValueOrPromise} from '.';
+import {BindingTracker} from './binding-tracker';
 const debug = debugModule('loopback:context');
 
 export type BindingFilter = (binding: Readonly<Binding<unknown>>) => boolean;
@@ -41,6 +42,13 @@ export class Context {
   }
 
   /**
+   * Get the parent context
+   */
+  get parent() {
+    return this._parent;
+  }
+
+  /**
    * Create a binding with the given key in the context. If a locked binding
    * already exists with the same key, an error will be thrown.
    *
@@ -66,14 +74,21 @@ export class Context {
       debug('Adding binding: %s', key);
     }
 
+    let existingBinding: Binding | undefined;
     const keyExists = this.registry.has(key);
     if (keyExists) {
-      const existingBinding = this.registry.get(key);
+      existingBinding = this.registry.get(key);
       const bindingIsLocked = existingBinding && existingBinding.isLocked;
       if (bindingIsLocked)
         throw new Error(`Cannot rebind key "${key}" to a locked binding`);
     }
     this.registry.set(key, binding);
+    if (existingBinding !== binding) {
+      if (existingBinding != null) {
+        this.publish('unbind', existingBinding);
+      }
+      this.publish('bind', binding);
+    }
     return this;
   }
 
@@ -93,7 +108,62 @@ export class Context {
     if (binding == null) return false;
     if (binding && binding.isLocked)
       throw new Error(`Cannot unbind key "${key}" of a locked binding`);
-    return this.registry.delete(key);
+    const found = this.registry.delete(key);
+    this.publish('unbind', binding);
+    return found;
+  }
+
+  protected trackers: BindingTracker[] = [];
+
+  /**
+   * Add the binding tracker as an event listener to the context chain
+   * @param bindingTracker
+   */
+  subscribe(bindingTracker: BindingTracker) {
+    let ctx: Context | undefined = this;
+    while (ctx != null) {
+      if (!ctx.trackers.includes(bindingTracker)) {
+        ctx.trackers.push(bindingTracker);
+      }
+      ctx = ctx._parent;
+    }
+  }
+
+  /**
+   * Remove the binding tracker from the context chain
+   * @param bindingTracker
+   */
+  unsubscribe(bindingTracker: BindingTracker) {
+    let ctx: Context | undefined = this;
+    while (ctx != null) {
+      const index = ctx.trackers.indexOf(bindingTracker);
+      if (index !== -1) {
+        ctx.trackers.splice(index, 1);
+      }
+      ctx = ctx._parent;
+    }
+  }
+
+  /**
+   * Publish an event to the registered binding trackers
+   * @param event Bind or unbind events
+   * @param binding Binding
+   */
+  protected publish(
+    event: 'bind' | 'unbind',
+    binding: Readonly<Binding<unknown>>,
+  ) {
+    // Reset trackers in the next tick so that we allow fluent APIs such as
+    // ctx.bind('key').to(...).tag(...);
+    process.nextTick(() => {
+      for (const tracker of this.trackers) {
+        if (tracker.filter(binding)) {
+          // FIXME: [rfeng] We just reset the tracker to invalidate the cache
+          // for now
+          tracker.reset();
+        }
+      }
+    });
   }
 
   /**

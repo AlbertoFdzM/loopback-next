@@ -12,7 +12,7 @@ import {
   MetadataAccessor,
   InspectionOptions,
 } from '@loopback/metadata';
-import {BoundValue, ValueOrPromise, resolveList} from './value-promise';
+import {BoundValue, ValueOrPromise} from './value-promise';
 import {Context, BindingFilter} from './context';
 import {BindingKey, BindingAddress} from './binding-key';
 import {ResolutionSession} from './resolution-session';
@@ -263,6 +263,30 @@ export namespace inject {
     return filter(Context.bindingTagFilter(bindingTag), metadata);
   };
 
+  /**
+   * Inject matching bound values by the filter function
+   *
+   * ```ts
+   * class MyControllerWithGetter {
+   *   @inject.filter(Context.bindingTagFilter('foo'))
+   *   getter: Getter<string[]>;
+   * }
+   *
+   * class MyControllerWithValues {
+   *   constructor(
+   *     @inject.filter(Context.bindingTagFilter('foo'))
+   *     public values: string[],
+   *   ) {}
+   * }
+   *
+   * class MyControllerWithTracker {
+   *   @inject.filter(Context.bindingTagFilter('foo'))
+   *   tracker: BindingTracker<string[]>;
+   * }
+   * ```
+   * @param bindingFilter A binding filter function
+   * @param metadata
+   */
   export const filter = function injectByFilter(
     bindingFilter: BindingFilter,
     metadata?: InjectionMetadata,
@@ -343,6 +367,10 @@ export function describeInjectedArguments(
   return meta || [];
 }
 
+/**
+ * Inspect the target type
+ * @param injection
+ */
 function inspectTargetType(injection: Readonly<Injection>) {
   let type = MetadataInspector.getDesignTypeForProperty(
     injection.target,
@@ -362,6 +390,12 @@ function inspectTargetType(injection: Readonly<Injection>) {
   return type;
 }
 
+/**
+ * Resolve
+ * @param ctx
+ * @param injection
+ * @param session
+ */
 function resolveByFilter(
   ctx: Context,
   injection: Readonly<Injection>,
@@ -369,11 +403,14 @@ function resolveByFilter(
 ) {
   const bindingFilter = injection.metadata!.bindingFilter;
   const tracker = new BindingTracker(ctx, bindingFilter);
+  const watch = injection.metadata!.watch;
 
   const targetType = inspectTargetType(injection);
   if (targetType === Function) {
+    if (watch !== false) tracker.watch();
     return tracker.asGetter();
   } else if (targetType === BindingTracker) {
+    if (watch !== false) tracker.watch();
     return tracker;
   } else {
     return tracker.resolve(session);

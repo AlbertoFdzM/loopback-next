@@ -8,6 +8,8 @@ import {Binding} from './binding';
 import {ResolutionSession} from './resolution-session';
 import {resolveList, ValueOrPromise} from './value-promise';
 import {Getter} from './inject';
+import * as debugFactory from 'debug';
+const debug = debugFactory('loopback:context:binding-tracker');
 
 /**
  * Tracking a given context chain to maintain a live list of matching bindings
@@ -22,9 +24,14 @@ export class BindingTracker<T = unknown> {
   private _cachedBindings: Readonly<Binding<T>>[] | undefined;
   private _cachedValues: ValueOrPromise<T[]> | undefined;
 
-  constructor(private ctx: Context, private filter: BindingFilter) {
-    // TODO: [rfeng] We need to listen/observe events emitted by the context
-    // chain so that the cache can be refreshed if necessary
+  constructor(
+    protected readonly ctx: Context,
+    public readonly filter: BindingFilter,
+  ) {}
+
+  watch() {
+    debug('Starting to watch context %s', this.ctx.name);
+    this.ctx.subscribe(this);
   }
 
   /**
@@ -32,6 +39,7 @@ export class BindingTracker<T = unknown> {
    * them from the context.
    */
   get bindings(): Readonly<Binding<T>>[] {
+    debug('Reading bindings');
     if (this._cachedBindings == null) {
       this._cachedBindings = this.findBindings();
     }
@@ -42,6 +50,7 @@ export class BindingTracker<T = unknown> {
    * Find matching bindings and refresh the cache
    */
   findBindings() {
+    debug('Finding matching bindings');
     this._cachedBindings = this.ctx.find(this.filter);
     return this._cachedBindings;
   }
@@ -50,6 +59,7 @@ export class BindingTracker<T = unknown> {
    * Invalidate the cache
    */
   reset() {
+    debug('Invalidating cache');
     this._cachedBindings = undefined;
     this._cachedValues = undefined;
   }
@@ -59,6 +69,7 @@ export class BindingTracker<T = unknown> {
    * @param session
    */
   resolve(session?: ResolutionSession) {
+    debug('Resolving values');
     this._cachedValues = resolveList(this.bindings, b => {
       return b.getValue(this.ctx, ResolutionSession.fork(session));
     });
@@ -69,11 +80,18 @@ export class BindingTracker<T = unknown> {
    * Get the list of resolved values. If they are not cached, it tries tp find
    * and resolve them.
    */
-  async values() {
-    if (this._cachedValues == null) {
-      this._cachedValues = this.resolve();
-    }
-    return await this._cachedValues;
+  values() {
+    debug('Reading values');
+    // [REVIEW] We need to get values in the next tick so that it can pick up
+    // binding changes as `Context` publishes such events in `process.nextTick`
+    return new Promise<T[]>(resolve => {
+      process.nextTick(async () => {
+        if (this._cachedValues == null) {
+          this._cachedValues = this.resolve();
+        }
+        resolve(await this._cachedValues);
+      });
+    });
   }
 
   /**
