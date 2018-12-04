@@ -101,7 +101,6 @@ property on the `Todo` model with the `@belongTo()` decorator to define the rela
 export class Todo extends Entity {
   // ...properties defined by the CLI...
 
-  @property()
   @belongsTo(() => TodoList)
   todoListId: number;
 
