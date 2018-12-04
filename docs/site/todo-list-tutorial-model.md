@@ -92,7 +92,7 @@ suggests, `@hasMany()` informs LoopBack 4 that a todo list can have many todo
 items.
 
 To complement `TodoList`'s relationship to `Todo`, we'll add in the `todoListId`
-property on the `Todo` model to define the relation on both ends:
+property on the `Todo` model with the `@belongTo()` decorator to define the relation on both ends:
 
 {% include code-caption.html content="src/models/todo.model.ts" %}
 
@@ -102,6 +102,7 @@ export class Todo extends Entity {
   // ...properties defined by the CLI...
 
   @property()
+  @belongsTo(() => TodoList)
   todoListId: number;
 
   // ...constructor def...
